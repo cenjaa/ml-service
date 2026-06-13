@@ -1,0 +1,33 @@
+# ── Secrets ───────────────────────────────────────────────────
+.env
+
+# ── Python runtime ────────────────────────────────────────────
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Large data files (transfer separately via SCP) ────────────
+# Comment out models/ if you want to track model files in git.
+# They are ~40MB and binary, so usually better to transfer manually.
+models/
+dataset/
+debug_output/
+
+# ── Output files ──────────────────────────────────────────────
+confusion_matrix.png
+*.log
+
+# ── IDE / OS ──────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

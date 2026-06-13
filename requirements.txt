@@ -1,0 +1,10 @@
+opencv-python-headless
+numpy
+scikit-learn
+joblib
+pygad
+boto3
+scikit-image
+fastapi
+uvicorn
+python-multipart

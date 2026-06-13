@@ -1,0 +1,38 @@
+version: "3.8"
+
+# =============================================================
+#  ML Service Stack — Face Recognition Attendance System
+#
+#  This service communicates with the backend stack via the
+#  shared external network "app_network".
+#  The backend reaches this service via http://ml-service:8001
+#
+#  Usage (from this directory):
+#    docker compose up -d [--build]
+# =============================================================
+
+services:
+
+  ml-service:
+    build:
+      # Build context is the repo root (one level up from this deploy/ folder)
+      context: ..
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      # Bound to 127.0.0.1 only — not exposed publicly.
+      # The backend reaches this via the shared Docker network (app_network),
+      # not via the host port. The host binding is only for local debugging.
+      - "127.0.0.1:8001:8001"
+    networks:
+      - app_network
+    env_file:
+      - .env
+
+# ── Networks ────────────────────────────────────────────────────
+networks:
+  # Shared network created once on the VPS:
+  #   docker network create app_network
+  # The backend stack joins this same network.
+  app_network:
+    external: true
