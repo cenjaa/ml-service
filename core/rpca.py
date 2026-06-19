@@ -5,7 +5,6 @@ Robust PCA via Inexact Augmented Lagrange Multiplier (IALM).
 Moved from rpca_algorithm.py — no logic changes.
 """
 import numpy as np
-from numpy.linalg import norm, svd
 
 
 class R_PCA:
@@ -21,7 +20,7 @@ class R_PCA:
 
         # Heuristic initialisation
         self.lmbda = lmbda if lmbda else 1 / np.sqrt(max(self.m, self.n))
-        self.mu    = mu    if mu    else 1.25 / norm(self.D, 2)
+        self.mu    = mu    if mu    else 1.25 / np.linalg.norm(self.D, 2)
         self.rho   = 1.5  # Growth rate for mu
 
     # ── Full IALM solver (used during training) ────────────────
@@ -32,7 +31,7 @@ class R_PCA:
         Sk = self.S
         Yk = self.Y
         Lk = np.zeros(self.D.shape)
-        d_norm = norm(self.D, "fro")
+        d_norm = np.linalg.norm(self.D, "fro")
 
         print(f"   -> [IALM] Starting decomposition on {self.D.shape} matrix...")
 
@@ -42,7 +41,7 @@ class R_PCA:
             Z  = self.D - Lk - Sk
             Yk = Yk + self.mu * Z
             self.mu = self.mu * self.rho
-            err = norm(Z, "fro") / d_norm
+            err = np.linalg.norm(Z, "fro") / d_norm
             iter_count += 1
             if iter_count % 10 == 0 or iter_count == 1:
                 print(f"   -> [IALM] Iteration {iter_count}: Error {err:.7f}")
@@ -69,14 +68,14 @@ class R_PCA:
         d      = img_vec.reshape(-1, 1).astype(np.float32)
         s      = np.zeros(d.shape)
         y      = np.zeros(d.shape)
-        mu     = 1.25 / (norm(d, 2) + 1e-6)
+        mu     = 1.25 / (np.linalg.norm(d, 2) + 1e-6)
         lmbda  = 1 / np.sqrt(max(d.shape))
         l      = np.zeros(d.shape)
 
         for _ in range(iterations):
             # Low-rank update — for a vector SVD reduces to a scalar norm
             temp_l = d - s + (1 / mu) * y
-            n = norm(temp_l)
+            n = np.linalg.norm(temp_l)
             l = max(n - 1 / mu, 0) * (temp_l / n) if n > 0 else np.zeros(d.shape)
 
             # Sparse update
@@ -91,7 +90,7 @@ class R_PCA:
 
     # ── Helpers ────────────────────────────────────────────────
     def svd_thresholding(self, X, tau):
-        U, S, V = svd(X, full_matrices=False)
+        U, S, V = np.linalg.svd(X, full_matrices=False)
         return np.dot(U, np.dot(np.diag(self.soft_thresholding(S, tau)), V))
 
     @staticmethod

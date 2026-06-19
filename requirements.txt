@@ -8,3 +8,4 @@ scikit-image
 fastapi
 uvicorn
 python-multipart
+PyYAML
