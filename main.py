@@ -1,33 +1,3 @@
-"""
-main.py
-────────
-FastAPI application entry point.
-
-Directory structure
-───────────────────
-ml-service/
-├── main.py               ← You are here (app factory + startup)
-├── config/
-│   ├── __init__.py
-│   └── settings.py       ← Env / YAML config loader, shared constants
-├── core/
-│   ├── __init__.py
-│   ├── rpca.py           ← R_PCA algorithm (IALM)
-│   └── state.py          ← In-memory state: models, training progress, cascades
-├── services/
-│   ├── __init__.py
-│   ├── storage.py        ← S3/MinIO client wrapper
-│   ├── model_store.py    ← Load model artefacts from disk → state globals
-│   └── trainer.py        ← Full training pipeline (runs in background thread)
-├── api/
-│   ├── __init__.py
-│   ├── health.py         ← GET  /health
-│   ├── infer.py          ← POST /api/infer
-│   └── train.py          ← POST /train  |  GET /train/status
-└── utils/
-    ├── __init__.py
-    └── image.py          ← undistort, align_face, LBP, augmentation
-"""
 import os
 from fastapi import FastAPI
 

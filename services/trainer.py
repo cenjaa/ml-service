@@ -1,14 +1,3 @@
-"""
-services/trainer.py
-────────────────────
-Background training pipeline:
-  1. Download dataset from MinIO
-  2. Load + augment images
-  3. Clean pixels with RPCA
-  4. Fit shared PCA subspace
-  5. Train near-distance and far-distance SVM classifiers
-  6. Persist models locally and upload back to MinIO
-"""
 import os
 import shutil
 import traceback
@@ -18,6 +7,8 @@ import joblib
 from typing import Optional
 from sklearn.svm import SVC
 from sklearn.decomposition import PCA
+from sklearn.model_selection import cross_val_score
+import pygad
 
 import core.state as state
 from config import MODELS_DIR, DATASET_DIR
@@ -44,14 +35,76 @@ def _rpca_clean_batch(X_hybrid: np.ndarray) -> np.ndarray:
     rpca = R_PCA(np.ones((1, 1)))
     cleaned = []
     for row in X_hybrid:
-        pixels          = row[:10000] * 255.0   # restore to [0, 255]
+        pixels          = row[:10000] * 255.0 
         lbp             = row[10000:]
         cleaned_pixels  = rpca.clean_image(pixels, iterations=5).flatten() / 255.0
         cleaned.append(np.concatenate([cleaned_pixels, lbp]))
     return np.array(cleaned)
 
 
-# ── Main training function (runs in a daemon thread) ────────────
+def _ga_optimize_svm(X_train: np.ndarray, y_train: list,
+                     num_generations: int = 15, sol_per_pop: int = 10):
+    """
+    Genetic Algorithm to optimise SVM hyperparameters C and gamma.
+
+    Each individual encodes two genes on a log-10 scale:
+        gene[0]  ->  C     = 10^gene[0]   (search range 0.01 -- 1 000)
+        gene[1]  ->  gamma  = 10^gene[1]   (search range 0.0001 -- 10)
+
+    Fitness is the mean accuracy of 3-fold stratified cross-validation.
+    Returns (best_C, best_gamma, best_fitness).
+    """
+    y_arr = np.array(y_train)
+
+    def fitness_func(ga_instance, solution, solution_idx):
+        C     = 10 ** solution[0]
+        gamma = 10 ** solution[1]
+        try:
+            clf    = SVC(C=C, gamma=gamma, kernel="rbf")
+            scores = cross_val_score(clf, X_train, y_arr, cv=3, scoring="accuracy")
+            return float(np.mean(scores))
+        except Exception:
+            return 0.0
+
+    def on_generation(ga_instance):
+        gen  = ga_instance.generations_completed
+        best = ga_instance.best_solution()[1]
+        print(f"   -> [GA] Generation {gen}/{num_generations}  "
+              f"best fitness = {best:.4f}")
+        _set_state(
+            "training",
+            f"GA-SVM: generation {gen}/{num_generations} "
+            f"(best accuracy {best:.2%})...",
+            65 + int(15 * gen / num_generations),
+        )
+
+    ga = pygad.GA(
+        num_generations=num_generations,
+        num_parents_mating=4,
+        fitness_func=fitness_func,
+        sol_per_pop=sol_per_pop,
+        num_genes=2,
+        gene_space=[
+            {"low": -2, "high": 3},   # log10(C):     0.01  ... 1 000
+            {"low": -4, "high": 1},   # log10(gamma): 0.0001 ... 10
+        ],
+        parent_selection_type="tournament",
+        K_tournament=3,
+        crossover_type="single_point",
+        mutation_type="random",
+        mutation_percent_genes=50,
+        on_generation=on_generation,
+        suppress_warnings=True,
+    )
+    ga.run()
+
+    best_solution, best_fitness, _ = ga.best_solution()
+    best_C     = 10 ** best_solution[0]
+    best_gamma = 10 ** best_solution[1]
+
+    return best_C, best_gamma, best_fitness
+
+
 def run_training(s3_client: Optional[S3Client]):
     """
     Execute the full training pipeline.
@@ -96,10 +149,10 @@ def run_training(s3_client: Optional[S3Client]):
         X_near, y_near = [], []
         X_far,  y_far  = [], []
         for img, lbl in zip(data_images, labels):
-            augs = augment_and_extract(img)          # [orig, flip, zoom-in, zoom-out]
-            X_near.extend([augs[0], augs[1], augs[2]])   # near: orig + flip + zoom-in
+            augs = augment_and_extract(img)
+            X_near.extend([augs[0], augs[1], augs[2]]) 
             y_near.extend([lbl,     lbl,     lbl    ])
-            X_far.extend( [augs[0], augs[1], augs[3]])   # far:  orig + flip + zoom-out
+            X_far.extend( [augs[0], augs[1], augs[3]])
             y_far.extend( [lbl,     lbl,     lbl    ])
 
         # Step 4 — RPCA cleaning
@@ -112,16 +165,37 @@ def run_training(s3_client: Optional[S3Client]):
         pca_model = PCA(n_components=0.98, whiten=True)
         pca_model.fit(np.vstack([X_n_clean, X_f_clean]))
 
-        # Step 6 — SVM classifiers
-        _set_state("training", "Training SVM classifiers...", 80)
-        svm_n = SVC(C=10.0, gamma="scale", kernel="rbf", probability=True).fit(
+        # Step 6 — GA-SVM: Optimise hyperparameters via Genetic Algorithm
+        #   - Initialise GA population
+        #   - Evolution loop: evaluate fitness (SVM CV accuracy),
+        #     selection, crossover, mutation
+        #   - Repeat until max generation reached
+        #   - Extract best hyperparameters (C, gamma)
+        _set_state("training", "Initialising GA population for SVM optimisation...", 65)
+        X_combined_pca = pca_model.transform(np.vstack([X_n_clean, X_f_clean]))
+        y_combined = y_near + y_far
+
+        best_C, best_gamma, best_fitness = _ga_optimize_svm(
+            X_combined_pca, y_combined
+        )
+        print(f"\U0001f9ec [GA-SVM] Best params: C={best_C:.4f}, "
+              f"gamma={best_gamma:.6f}, fitness={best_fitness:.4f}")
+
+        # Step 7 — Train final SVM classifiers with GA-optimised params
+        _set_state(
+            "training",
+            f"Training final SVMs with GA params "
+            f"(C={best_C:.2f}, \u03b3={best_gamma:.4f})...",
+            82,
+        )
+        svm_n = SVC(C=best_C, gamma=best_gamma, kernel="rbf", probability=True).fit(
             pca_model.transform(X_n_clean), y_near
         )
-        svm_f = SVC(C=10.0, gamma="scale", kernel="rbf", probability=True).fit(
+        svm_f = SVC(C=best_C, gamma=best_gamma, kernel="rbf", probability=True).fit(
             pca_model.transform(X_f_clean), y_far
         )
 
-        # Step 7 — Persist
+        # Step 8 — Persist
         _set_state("training", "Saving models...", 90)
         os.makedirs(MODELS_DIR, exist_ok=True)
         joblib.dump(svm_n,                            os.path.join(MODELS_DIR, "svm_near.pkl"))
@@ -132,7 +206,7 @@ def run_training(s3_client: Optional[S3Client]):
         if s3_client:
             s3_client.upload_models(MODELS_DIR)
 
-        # Step 8 — Clean up dataset and hot-reload models
+        # Step 9 — Clean up dataset and hot-reload models
         shutil.rmtree(DATASET_DIR, ignore_errors=True)
         load_models()
 
